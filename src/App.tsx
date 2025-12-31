@@ -75,7 +75,7 @@ function App() {
       <div className="max-w-md w-full z-10">
         <div className="text-center mb-12">
             <h1 className="text-5xl font-extrabold text-transparent bg-clip-text bg-gradient-to-r from-primary to-secondary mb-4">
-                QuizMaster
+                RTG Quiz
             </h1>
             <p className="text-slate-400 text-lg">Gerçek zamanlı bilgi yarışması platformu.</p>
         </div>
