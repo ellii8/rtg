@@ -74,6 +74,11 @@ function App() {
 
       <div className="max-w-md w-full z-10">
         <div className="text-center mb-12">
+            <img
+                src="/rtg.png"
+                alt="RTG logo"
+                className="w-20 h-20 mx-auto mb-4 drop-shadow-lg"
+            />
             <h1 className="text-5xl font-extrabold text-transparent bg-clip-text bg-gradient-to-r from-primary to-secondary mb-4">
                 RTG Quiz
             </h1>
