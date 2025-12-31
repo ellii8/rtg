@@ -82,7 +82,7 @@ function App() {
             <h1 className="text-5xl font-extrabold text-transparent bg-clip-text bg-gradient-to-r from-primary to-secondary mb-4">
                 RTG Quiz
             </h1>
-            <p className="text-slate-400 text-lg">Gerçek zamanlı bilgi yarışması platformu.</p>
+            <p className="text-slate-400 text-lg">Yılbaşı Quiz</p>
         </div>
 
         <div className="bg-surface/50 backdrop-blur-lg border border-slate-700 p-8 rounded-3xl shadow-2xl space-y-8">
