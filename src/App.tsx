@@ -88,7 +88,7 @@ function App() {
                     <User className="absolute left-4 top-1/2 transform -translate-y-1/2 text-slate-500" />
                     <input
                         type="text"
-                        placeholder="Rumuz Girin (Nick)"
+                        placeholder="Nick girin"
                         value={nickname}
                         onChange={(e) => setNickname(e.target.value)}
                         className="w-full bg-dark/80 border border-slate-600 rounded-xl py-4 pl-12 pr-4 text-white placeholder-slate-500 focus:ring-2 focus:ring-primary focus:border-transparent outline-none transition-all"
