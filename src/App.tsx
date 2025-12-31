@@ -113,7 +113,7 @@ function App() {
         </div>
         
         <p className="text-center mt-8 text-slate-500 text-xs max-w-xs mx-auto">
-            İpucu: Test etmek için bu sayfayı <b>yeni sekmede</b> açın. Bir sekmede yönetici, diğerinde oyuncu olun.
+            Nick girin ve soruyu bekleyin!
         </p>
       </div>
     </div>
