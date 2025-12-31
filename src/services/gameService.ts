@@ -1,7 +1,9 @@
-import { useEffect, useState, useCallback, useRef } from 'react';
-import { ChannelEvent, GamePhase, GameState, Player } from '../types';
+import { useEffect, useState, useCallback } from 'react';
+import { onValue, ref, remove, runTransaction, set, update } from 'firebase/database';
+import { getFirebaseDatabase } from '../firebaseClient';
+import { GamePhase, GameState, Player } from '../types';
 
-const CHANNEL_NAME = 'quiz_master_channel_v1';
+const GAME_PATH = 'games/default';
 
 // --- ADMIN HOOK ---
 export const useAdminGame = () => {
@@ -11,134 +13,92 @@ export const useAdminGame = () => {
     currentQuestion: null,
   });
 
-  const channelRef = useRef<BroadcastChannel | null>(null);
-  const gameStateRef = useRef<GameState>(gameState);
+  const db = getFirebaseDatabase();
 
-  // Keep Ref in sync with State to access latest state inside event listeners
+  // Subscribe to remote state and player list
   useEffect(() => {
-    gameStateRef.current = gameState;
-    
-    // Broadcast state whenever it changes (Single Source of Truth)
-    if (channelRef.current) {
-      channelRef.current.postMessage({
-        type: 'ADMIN_UPDATE_STATE',
-        payload: gameState,
-      });
-    }
-  }, [gameState]);
+    const stateRef = ref(db, `${GAME_PATH}/state`);
+    const playersRef = ref(db, `${GAME_PATH}/players`);
 
-  // Initialize Channel & Heartbeat
-  useEffect(() => {
-    const channel = new BroadcastChannel(CHANNEL_NAME);
-    channelRef.current = channel;
+    const unsubscribeState = onValue(stateRef, (snap) => {
+      const remoteState = snap.val();
+      setGameState((prev) => ({
+        ...prev,
+        phase: remoteState?.phase ?? GamePhase.LOBBY,
+        currentQuestion: remoteState?.currentQuestion ?? null,
+      }));
+    });
 
-    channel.onmessage = (event: MessageEvent<ChannelEvent>) => {
-      const { type, payload } = event.data;
-
-      if (type === 'PLAYER_JOIN') {
-        // 1. Immediately send current state so player gets off "Connecting..." screen
-        // This sends the state *before* the player is added to the list, but it renders the UI.
-        // The subsequent setGameState will trigger the useEffect to send the updated list.
-        channel.postMessage({
-            type: 'ADMIN_UPDATE_STATE',
-            payload: gameStateRef.current,
-        });
-
-        // 2. Add player to state
-        setGameState((prev) => {
-          if (prev.players.find((p) => p.id === payload.id)) return prev;
-          const newPlayers = [
-            ...prev.players,
-            {
-              id: payload.id,
-              nickname: payload.nickname,
-              score: 0,
-              currentAnswer: null,
-              submittedAt: null,
-              isOnline: true,
-            },
-          ];
-          return { ...prev, players: newPlayers };
-        });
-      }
-
-      if (type === 'PLAYER_SUBMIT') {
-        setGameState((prev) => {
-            // Only accept answers if question is active
-            if (prev.phase !== GamePhase.QUESTION_ACTIVE) return prev;
-            
-            const updatedPlayers = prev.players.map((p) =>
-                p.id === payload.id ? { ...p, currentAnswer: payload.answer, submittedAt: Date.now() } : p
-            );
-            return { ...prev, players: updatedPlayers };
-        });
-      }
-    };
-
-    // Periodic Sync (Heartbeat): Broadcast state every 3 seconds to ensure consistency
-    // This fixes issues where a packet might be dropped or a tab was asleep.
-    const syncInterval = setInterval(() => {
-        if (channelRef.current) {
-            channelRef.current.postMessage({
-                type: 'ADMIN_UPDATE_STATE',
-                payload: gameStateRef.current,
-            });
-        }
-    }, 3000);
+    const unsubscribePlayers = onValue(playersRef, (snap) => {
+      const playersObject = snap.val() || {};
+      const players: Player[] = Object.entries(playersObject).map(([id, value]: [string, any]) => ({
+        id,
+        nickname: value.nickname,
+        score: value.score ?? 0,
+        currentAnswer: value.currentAnswer ?? null,
+        submittedAt: value.submittedAt ?? null,
+        isOnline: value.isOnline ?? false,
+      }));
+      setGameState((prev) => ({ ...prev, players }));
+    });
 
     return () => {
-      clearInterval(syncInterval);
-      channel.close();
+      unsubscribeState();
+      unsubscribePlayers();
     };
-  }, []);
+  }, [db]);
 
   // Actions
   const startQuestion = (text: string, timeLimit: number) => {
     const endTime = Date.now() + timeLimit * 1000;
-    setGameState((prev) => ({
-      ...prev,
+    const stateRef = ref(db, `${GAME_PATH}/state`);
+    const updates: Record<string, any> = {};
+
+    // Reset answers for all players
+    gameState.players.forEach((player) => {
+      updates[`${GAME_PATH}/players/${player.id}/currentAnswer`] = null;
+      updates[`${GAME_PATH}/players/${player.id}/submittedAt`] = null;
+    });
+
+    update(ref(db), updates);
+    set(stateRef, {
       phase: GamePhase.QUESTION_ACTIVE,
       currentQuestion: { text, timeLimit, endTime },
-      players: prev.players.map(p => ({ ...p, currentAnswer: null, submittedAt: null })) // Reset answers
-    }));
+    });
   };
 
   const endQuestion = useCallback(() => {
-    setGameState((prev) => {
-        if (prev.phase === GamePhase.GRADING) return prev;
-        return {
-            ...prev,
-            phase: GamePhase.GRADING,
-        };
+    const stateRef = ref(db, `${GAME_PATH}/state`);
+    set(stateRef, {
+      phase: GamePhase.GRADING,
+      currentQuestion: gameState.currentQuestion,
     });
-  }, []);
+  }, [db, gameState.currentQuestion]);
 
   const updateScore = (playerId: string, points: number) => {
-    setGameState((prev) => ({
-      ...prev,
-      players: prev.players.map((p) =>
-        p.id === playerId ? { ...p, score: p.score + points } : p
-      ),
-    }));
+    const scoreRef = ref(db, `${GAME_PATH}/players/${playerId}/score`);
+    runTransaction(scoreRef, (current) => (current || 0) + points);
   };
 
   const showLeaderboard = () => {
-    setGameState((prev) => ({ ...prev, phase: GamePhase.LEADERBOARD }));
+    const stateRef = ref(db, `${GAME_PATH}/state`);
+    set(stateRef, {
+      phase: GamePhase.LEADERBOARD,
+      currentQuestion: gameState.currentQuestion,
+    });
   };
 
   const returnToLobby = () => {
-    setGameState((prev) => ({ 
-        ...prev, 
-        phase: GamePhase.LOBBY,
-        currentQuestion: null
-    }));
+    const stateRef = ref(db, `${GAME_PATH}/state`);
+    set(stateRef, {
+      phase: GamePhase.LOBBY,
+      currentQuestion: null,
+    });
   };
 
   const kickPlayer = (playerId: string) => {
-      setGameState(prev => ({
-          ...prev,
-          players: prev.players.filter(p => p.id !== playerId)
-      }));
+    const playerRef = ref(db, `${GAME_PATH}/players/${playerId}`);
+    remove(playerRef);
   };
 
   return {
@@ -155,47 +115,75 @@ export const useAdminGame = () => {
 // --- PLAYER HOOK ---
 export const usePlayerGame = (playerId: string, nickname: string) => {
   const [gameState, setGameState] = useState<GameState | null>(null);
-  const channelRef = useRef<BroadcastChannel | null>(null);
+  const db = getFirebaseDatabase();
 
   useEffect(() => {
-    const channel = new BroadcastChannel(CHANNEL_NAME);
-    channelRef.current = channel;
-
-    // Listen for state updates from Admin
-    channel.onmessage = (event: MessageEvent<ChannelEvent>) => {
-      if (event.data.type === 'ADMIN_UPDATE_STATE') {
-        setGameState(event.data.payload);
-      }
-    };
+    const stateRef = ref(db, `${GAME_PATH}/state`);
+    const playersRef = ref(db, `${GAME_PATH}/players`);
 
     // Join immediately
-    channel.postMessage({
-      type: 'PLAYER_JOIN',
-      payload: { id: playerId, nickname },
+    const playerRef = ref(db, `${GAME_PATH}/players/${playerId}`);
+    set(playerRef, {
+      nickname,
+      score: 0,
+      currentAnswer: null,
+      submittedAt: null,
+      isOnline: true,
     });
-    
-    // Retry join after 1 second if no state received (Handling potential race condition)
-    const retryTimeout = setTimeout(() => {
-         if (!channelRef.current) return;
-         channel.postMessage({
-            type: 'PLAYER_JOIN',
-            payload: { id: playerId, nickname },
-        });
-    }, 1000);
+
+    const unsubscribers: Array<() => void> = [];
+
+    unsubscribers.push(
+      onValue(stateRef, (snap) => {
+        const state = snap.val();
+        setGameState((prev) => ({
+          ...(prev || { players: [], phase: GamePhase.LOBBY, currentQuestion: null }),
+          phase: state?.phase ?? GamePhase.LOBBY,
+          currentQuestion: state?.currentQuestion ?? null,
+        }));
+      })
+    );
+
+    unsubscribers.push(
+      onValue(playersRef, (snap) => {
+        const playersObject = snap.val() || {};
+        const players: Player[] = Object.entries(playersObject).map(([id, value]: [string, any]) => ({
+          id,
+          nickname: value.nickname,
+          score: value.score ?? 0,
+          currentAnswer: value.currentAnswer ?? null,
+          submittedAt: value.submittedAt ?? null,
+          isOnline: value.isOnline ?? false,
+        }));
+
+        setGameState((prev) =>
+          prev
+            ? {
+                ...prev,
+                players,
+              }
+            : {
+                phase: GamePhase.LOBBY,
+                players,
+                currentQuestion: null,
+              }
+        );
+      })
+    );
 
     return () => {
-      clearTimeout(retryTimeout);
-      channel.close();
+      unsubscribers.forEach((unsub) => unsub());
+      remove(playerRef);
     };
-  }, [playerId, nickname]);
+  }, [db, playerId, nickname]);
 
   const submitAnswer = (answer: string) => {
-    if (channelRef.current) {
-      channelRef.current.postMessage({
-        type: 'PLAYER_SUBMIT',
-        payload: { id: playerId, answer },
-      });
-    }
+    const playerRef = ref(db, `${GAME_PATH}/players/${playerId}`);
+    update(playerRef, {
+      currentAnswer: answer,
+      submittedAt: Date.now(),
+      isOnline: true,
+    });
   };
 
   const myPlayer = gameState?.players.find((p) => p.id === playerId);
